@@ -137,10 +137,16 @@ $IPT -P INPUT DROP
 $IPT -P FORWARD DROP
 
 if [ "$TS" ]; then echo "  NAT rule to forward across interfaces (SNAT)"; fi
-#$IPT -t nat -A POSTROUTING -o eth0 -j SNAT --to-source $extip
+$IPT -t nat -A POSTROUTING -o eth0 -j SNAT --to-source $extip
 
-if [ "$TS" ]; then echo "  NAT Loopback Masquerade"; fi
-$IPT -t nat -A POSTROUTING -s $INTRANET -o $WANIF -j MASQUERADE
+#----------This is garbage.  Masquerade alternative to SNAT----------------
+#if [ "$TS" ]; then echo "  NAT Loopback Masquerade"; fi
+#$IPT -t nat -A POSTROUTING -s $INTRANET -o $WANIF -j MASQUERADE
+
+#----------This is phuzi0n's suggestion to fix NAT loopback on certain builds of DDWRT.  I'm applying it here to see if it's feasible here.-------
+iptables -t mangle -A PREROUTING ! -i $WANIF -d $WANIP -j MARK --set-mark 0xd001
+iptables -t mangle -A PREROUTING -j CONNMARK --save-mark
+iptables -t nat -A POSTROUTING -m mark --mark 0xd001 -j MASQUERADE 
 
 if [ "$TS" ]; then echo "  INPUT rules for loopback and established connections from WAN"; fi
 $IPT -A INPUT -i lo -j ACCEPT
@@ -148,7 +154,7 @@ $IPT -A INPUT -i $LANIF -s $lan -j ACCEPT
 $IPT -A INPUT -i $WANIF -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 if [ "$TS" ]; then echo "  Gateway exceptions to accept WAN traffic"; fi
-GatewayAccept tcp 80
+#GatewayAccept tcp 80
 GatewayAccept tcp 22
 $IPT -A INPUT -p tcp --destination-port 22 -j ACCEPT
 
@@ -166,8 +172,8 @@ PortForward tcp 25565 192.168.1.5
 PortForward udp 25565 192.168.1.5
 
 #----My Minecraft Server
-PortForwardNATLoopback tcp 25566 192.168.1.4
-PortForwardNATLoopback udp 25566 192.168.1.4
+PortForward tcp 25566 192.168.1.4
+PortForward udp 25566 192.168.1.4
 
 #----Lee's Garry's Mod
 PortRangeForward tcp 27000 27050 192.168.1.7
@@ -177,8 +183,17 @@ PortForward udp 3478 192.168.1.7
 PortRangeForward tcp 4379 4380 192.168.1.7
 PortRangeForward udp 4379 4380 192.168.1.7
 
+#----Lee's Starbound
+PortForward tcp 21025 192.168.1.5
+
+#----Lee's Web Server
+PortForward tcp 80 192.168.1.7
 
 
+#brctl hairpin eth0 eth1 on
+#brctl hairpin eth0 eth2 on
+#brctl hairpin br0 eth1 on
+#brctl hairpin br0 eth2 on
 
 echo 1 > /proc/sys/net/ipv4/ip_forward
 echo ""
