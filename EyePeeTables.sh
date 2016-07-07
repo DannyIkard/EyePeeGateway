@@ -1,12 +1,21 @@
 #!/bin/bash
 
+LOG="/tmp/EyePeeTables.log"
+EKO(){
+  echo "$1"
+  echo "$1" >>/var/log/EyePeeTables.log
+}
+
+
+EKO "Running EyePeeTables.sh ------"
+
 echo ""
 TS="$1"
-if [ "$TS" ]; then
+if [ "$TS" == debug ]; then
     clear
-    echo "--EyePeeTableGateway.sh - Debug Enabled -------"
+    EKO "--EyePeeTables.sh - Debug Enabled -------"
 else
-    echo "--EyePeeTablesGateway.sh-----------------------"
+    EKO "--EyePeeTables.sh -----------------"
 fi
 echo ""
 
@@ -50,11 +59,11 @@ PortForward(){
     A="$IPT -t nat -I PREROUTING -p $PROTO -d $WANIP --dport $PORT -j DNAT --to $DESTIP:$PORT"
     B="$IPT -I FORWARD -p $PROTO -d $DESTIP --dport $PORT -j ACCEPT"
     if [ "$TS" ]; then
-        echo "  Forwarding $PROTO port $PORT to $DESTIP"
-        echo "    $A"; `$A`
-        echo "    $B"; `$B`
+        EKO "  Forwarding $PROTO port $PORT to $DESTIP"
+        EKO "    $A"; `$A`
+        EKO "    $B"; `$B`
     else
-        echo "  Forwarding $PROTO port $PORT to $DESTIP"
+        EKO "  Forwarding $PROTO port $PORT to $DESTIP"
         `$A`
         `$B`
     fi
@@ -68,11 +77,11 @@ PortRangeForward(){
     A="$IPT -t nat -I PREROUTING -d $WANIP -p $PROTO -m $PROTO --match multiport --dports $STARTPORT:$ENDPORT -j DNAT --to $DESTIP"
     B="$IPT -I FORWARD -p $PROTO -m $PROTO -d $DESTIP --dport $STARTPORT:$ENDPORT -j ACCEPT"
     if [ "$TS" ]; then
-        echo "  Forwarding $PROTO ports $STARTPORT-$ENDPORT to $DESTIP"
-        echo "    $A"; `$A`
-        echo "    $B"; `$B`
+        EKO "  Forwarding $PROTO ports $STARTPORT-$ENDPORT to $DESTIP"
+        EKO "    $A"; `$A`
+        EKO "    $B"; `$B`
     else
-        echo "  Forwarding $PROTO ports $STARTPORT-$ENDPORT to $DESTIP"
+        EKO "  Forwarding $PROTO ports $STARTPORT-$ENDPORT to $DESTIP"
         `$A`
         `$B`
     fi
@@ -84,41 +93,48 @@ GatewayAccept(){
     PORT="$2"
     A="$IPT -I INPUT -p $PROTO --destination-port $PORT -j ACCEPT"
     if [ "$TS" ]; then
-        echo "  Accepting $PROTO port $PORT at the gateway"
-        echo "    $A"; `$A`
+        EKO "  Accepting $PROTO port $PORT at the gateway"
+        EKO "    $A"; `$A`
     else
-        echo "  Accepting $PROTO port $PORT at the gateway"
+        EKO "  Accepting $PROTO port $PORT at the gateway"
         `$A`
     fi
 }
 
 
 
-echo "Analyzing network..."
+
+
+
+
+EKO "Analyzing network..."
 LANIF="br0"
-WANIF="eth0"
-WANIP1=$(ifconfig eth0 | grep 'inet addr:'| grep -v '127.0.0.1' | cut -d: -f2 | awk '{ print $1}')
-WANIP2=$(ip -f inet -o addr show eth0|cut -d\  -f 7 | cut -d/ -f 1)
+WANIF="`cat /etc/EyePeeNetworking/WANIFs | head -1`"
+
+WANIP1=$(ifconfig $WANIF | grep 'inet '| grep -v '127.0.0.1' | xargs | cut -d " " -f2)
+WANIP2=$(ip -f inet -o addr show $WANIF | cut -d " "  -f 7 | cut -d "/" -f 1)
 if [ "$WANIP1" == "$WANIP2" ]; then
     WANIP="$WANIP1"
-    echo "  WAN: $WANIP on $WANIF"
+    EKO "  WAN: $WANIP on $WANIF"
   else
-    echo "Unable to determine WAN IP reliably...  Exiting."
+    EKO "Unable to determine WAN IP reliably...  Exiting."
     exit 0
 fi
-LANIP=$(ifconfig br0 | grep 'inet addr:'| grep -v '127.0.0.1' | cut -d: -f2 | awk '{ print $1}')
+LANIP=$(ifconfig $LANIF | grep 'inet ' | grep -v '127.0.0.1' | xargs | cut -d " " -f2)
+if [ ! "$LANIP" ]; then
+  EKO "------ Cannot determine LAN IP, exiting... ------"
+  exit 1
+fi
 echo "  Gateway: $LANIP on $LANIF"
 INTRANET="`echo $LANIP | cut -d '.' -f-3`.0/24"
 echo "  Assuming Class C Intranet: $INTRANET"
-IPT=/sbin/iptables
-extip="$WANIP"
-lan="$INTRANET"
+IPT=$(which iptables)
 
 
 
 
 echo ""
-echo "Clearing tables..."
+EKO "Clearing tables..."
 $IPT -F
 $IPT -X
 $IPT -t nat -F
@@ -131,26 +147,26 @@ echo ""
 
 
 
-echo "Basic NAT..."
+EKO "Basic NAT..."
 if [ "$TS" ]; then echo "  Default DROP rules (firewall)"; fi
 $IPT -P INPUT DROP
 $IPT -P FORWARD DROP
 
 if [ "$TS" ]; then echo "  NAT rule to forward across interfaces (SNAT)"; fi
-$IPT -t nat -A POSTROUTING -o eth0 -j SNAT --to-source $extip
+$IPT -t nat -A POSTROUTING -o $WANIF -j SNAT --to-source $WANIP
 
 #----------This is garbage.  Masquerade alternative to SNAT----------------
 #if [ "$TS" ]; then echo "  NAT Loopback Masquerade"; fi
 #$IPT -t nat -A POSTROUTING -s $INTRANET -o $WANIF -j MASQUERADE
 
 #----------This is phuzi0n's suggestion to fix NAT loopback on certain builds of DDWRT.  I'm applying it here to see if it's feasible here.-------
-iptables -t mangle -A PREROUTING ! -i $WANIF -d $WANIP -j MARK --set-mark 0xd001
-iptables -t mangle -A PREROUTING -j CONNMARK --save-mark
-iptables -t nat -A POSTROUTING -m mark --mark 0xd001 -j MASQUERADE 
+#iptables -t mangle -A PREROUTING ! -i $WANIF -d $WANIP -j MARK --set-mark 0xd001
+#iptables -t mangle -A PREROUTING -j CONNMARK --save-mark
+#iptables -t nat -A POSTROUTING -m mark --mark 0xd001 -j MASQUERADE 
 
 if [ "$TS" ]; then echo "  INPUT rules for loopback and established connections from WAN"; fi
 $IPT -A INPUT -i lo -j ACCEPT
-$IPT -A INPUT -i $LANIF -s $lan -j ACCEPT
+$IPT -A INPUT -i $LANIF -s $INTRANET -j ACCEPT
 $IPT -A INPUT -i $WANIF -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 if [ "$TS" ]; then echo "  Gateway exceptions to accept WAN traffic"; fi
@@ -159,13 +175,14 @@ GatewayAccept tcp 22
 $IPT -A INPUT -p tcp --destination-port 22 -j ACCEPT
 
 if [ "$TS" ]; then echo "  FORWARD rules for loopback and established connections from WAN"; fi
-$IPT -A FORWARD -i $LANIF -s $lan -j ACCEPT
+$IPT -A FORWARD -i $LANIF -s $INTRANET -j ACCEPT
 $IPT -A FORWARD -i $WANIF -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 
 echo ""
-echo "WAN to LAN Port Forwarding..."
+EKO "WAN to LAN Port Forwarding..."
 
+PortForward tcp 7777 192.168.1.5
 
 #----Lee's Minecraft Server
 PortForward tcp 25565 192.168.1.5
@@ -175,7 +192,7 @@ PortForward udp 25565 192.168.1.5
 PortForward tcp 25566 192.168.1.4
 PortForward udp 25566 192.168.1.4
 
-#----Lee's Garry's Mod
+#----Lees Garry's Mod
 PortRangeForward tcp 27000 27050 192.168.1.7
 PortRangeForward udp 27000 27050 192.168.1.7
 PortForward tcp 3478 192.168.1.7
@@ -190,13 +207,27 @@ PortForward tcp 21025 192.168.1.5
 PortForward tcp 80 192.168.1.7
 
 
-#brctl hairpin eth0 eth1 on
-#brctl hairpin eth0 eth2 on
+#brctl hairpin $WANIF eth1 on
+#brctl hairpin $WANIF eth2 on
 #brctl hairpin br0 eth1 on
 #brctl hairpin br0 eth2 on
 
 echo 1 > /proc/sys/net/ipv4/ip_forward
 echo ""
-echo "--Finished Peeing on Tables-----------------Enjoy!"
+EKO "--Finished Peeing on Tables-----------------Enjoy!"
 echo ""
+
+NotSoNice(){
+  PID="`ps aux | grep \"$1\" | grep -v grep | xargs | cut -d ' ' -f2`"
+  if [[ "$PID" == "" || "$PID" == "0" ]]; then
+    EKO "PID for $1 not found!"
+  else
+    sudo renice -n "$2" -p "$PID"
+  fi
+}
+
+NotSoNice "dnsmasq" "-5"
+NotSoNice "zmdc.pl" "10"
+
+
 exit 0

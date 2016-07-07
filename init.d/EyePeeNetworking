@@ -1,0 +1,136 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:       eyepeenetworking
+# Required-Start: $network $remote_fs $syslog $local_fs $named
+# Required-Stop:  $network $remote_fs $syslog $local_fs $named
+# Default-Start:  2 3 4 5
+# Default-Stop:   0 1 6
+# Short-Description: Debian gateway configuration
+# Description:    Debian gateway configuration
+### END INIT INFO
+
+
+touch /var/log/EyePeeNetworking.log
+Eko(){
+     echo "`date` - $1" >> /var/log/EyePeeNetworking.log
+     echo "$1"
+}
+
+
+Setup(){
+    Eko "-----Starting EyePeeNetworking-----"
+
+    if [ "`which brctl`" != "/sbin/brctl" ]; then
+      Eko "Bridge-utils not installed.  Installing..."
+      apt-get update
+      apt-get install bridge-utils
+    fi
+    DetermineInterfaces
+    BuildEtcNetworkInterfaces
+    Eko "--Executing EyePeeTables.sh--"
+    bash /etc/EyePeeTables.sh
+    Eko "--Executing EyePeeWatchdog.sh--"
+    bash /etc/EyePeeWatchdog.sh &
+}
+
+
+DetermineInterfaces(){
+  Eko "Determining available interfaces...  "
+  AvailInterfaces="`netstat -i | cut -d \" \" -f1 | grep -v \"Kernel\" | grep -v \"Iface\" | grep -v \"br0\" | grep -v \"lo\"`"
+  WorkDir="/tmp/EyePeeNetworking/AvailInterfaces"
+  mkdir -p $WorkDir; mount -t tmpfs -o size=1m tmpfs $WorkDir; touch $WorkDir/result
+  echo "$AvailInterfaces" | while read line ; do
+    if [ "`ifconfig $line | grep 'inet ' | grep -v '127.0.0.1' | xargs | cut -d " " -f2`" != "" ]; then
+      echo "$line" >>$WorkDir/WANIFs
+    else
+      echo "$line" >>$WorkDir/LANIFs
+    fi
+  done
+  WANIFs=`cat "$WorkDir/WANIFs"`
+  LANIFs=`cat "$WorkDir/LANIFs"`
+  umount $WorkDir
+
+  if [ "$WANIFs" == "" ]; then
+    Eko "No working WAN connections detected, keeping old WAN connections"
+  else
+    Eko "--- WAN Interfaces ---"
+    mkdir /etc/EyePeeNetworking 2>/dev/null
+    Eko "$WANIFs"
+    Eko "$WANIFs" >/etc/EyePeeNetworking/WANIFs
+  fi
+
+  if [ "$LANIFs" == "" ]; then
+    Eko "No LAN connections, keeping old LAN connections"
+  else
+    Eko "--- LAN Interfaces ---"
+    mkdir /etc/EyePeeNetworking 2>/dev/null
+    Eko "$LANIFs"
+    Eko "$LANIFs" >/etc/EyePeeNetworking/LANIFs
+  fi
+}
+
+
+
+BuildEtcNetworkInterfaces(){
+  WANIFs="`cat /etc/EyePeeNetworking/WANIFs | head -1`"
+  #----  TODO: Multihoming ----
+  LANIFs="`cat /etc/EyePeeNetworking/LANIFs`"
+
+  Eko "Configuring br0"
+  brctl addbr br0 2>/var/log/EyePeeTables.log
+  echo "$LANIFs" | while read line ; do
+    brctl addif br0 "$line" 2>/var/log/EyePeeTables.log
+  done
+  Eko "Building /etc/network/interfaces"
+  echo "">/etc/network/interfaces
+  cat <<'EOF' >> /etc/network/interfaces
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo br0
+iface lo inet loopback
+
+EOF
+  echo "$LANIFs" | while read line ; do
+    echo "iface \"$line\" inet manual" >>/etc/network/interfaces
+  done
+  echo "auto $WANIFs" >>/etc/network/interfaces
+  echo "iface $WANIFs inet dhcp" >>/etc/network/interfaces
+  LANIFsLine = "`cat /etc/EyePeeNetworking/LANIFsLine`"
+  cat <<'EOF' >> /etc/network/interfaces
+
+manual br0
+iface br0 inet static
+	bridge-ports$LANIFsLine
+	address 192.168.1.1
+	network 192.168.1.0
+	netmask 255.255.255.0
+	broadcast 192.168.1.255
+	gateway 192.168.1.1
+	bridge_stp on
+
+EOF
+  Eko "Restarting networking"
+  /etc/init.d/networking restart
+}
+
+case "$1" in
+  start|"")
+        Setup
+	;;
+  restart|reload|force-reload)
+	echo "Error: argument '$1' not supported" >&2
+	exit 3
+	;;
+  stop|status)
+	# No-op
+	;;
+  *)
+	echo "Usage: EyePeeNetworking [start|stop]" >&2
+	exit 3
+	;;
+esac
+exit 0
